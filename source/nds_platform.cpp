@@ -50,8 +50,22 @@ void _sendCommand(const uint8_t *cmdbuf, uint16_t response_len, uint8_t *resp, u
             defaultFlags |= CARD_BLK_SIZE(4);
             break;
     }
-    cardPolledTransfer(defaultFlags | CARD_ACTIVATE | CARD_nRESET,
-                       (u32*)resp, (response_len / 4), reversed);
+    if ((defaultFlags & CARD_WR)) {
+        cardPolledTransfer(defaultFlags | CARD_ACTIVATE | CARD_nRESET,
+                           (u32*)resp, (response_len / 4), reversed);
+    } else {
+        cardWriteCommand(reversed);
+        REG_ROMCTRL = flags;
+        u32 *buf = (u32*)resp;
+        u32* target = buf + (response_len / 4);
+        do {
+            // Read data if available
+            if (REG_ROMCTRL & CARD_DATA_READY) {
+                u32 data = (buf != NULL && buf < target) ? *buf++ : 0;
+                REG_CARD_DATA_RD = data;
+            }
+        } while (REG_ROMCTRL & CARD_BUSY);
+    }
 }
 
 bool platform::sendCommand(const uint8_t *cmdbuf, uint16_t response_len, uint8_t *resp, ntrcard::OpFlags flags) {
@@ -115,6 +129,22 @@ void platform::initKey2Seed(std::uint64_t x, std::uint64_t y) {
     REG_ROMCTRL = CARD_nRESET| CARD_SEC_SEED | CARD_SEC_EN | CARD_SEC_DAT;
 }
 
+void platform::startSPITransfer() {
+    REG_AUXSPICNT = 0xA040;
+}
+void platform::waitSPIBusy() {
+    while (REG_AUXSPICNT & 0x80);
+}
+void platform::writeSPI(uint8_t op) {
+    REG_AUXSPIDATA = op;
+    platform::waitSPIBusy();
+}
+uint8_t platform::readSPI() {
+    return REG_AUXSPIDATA;
+}
+void platform::endSPITransfer() {
+    REG_AUXSPICNT = 0x40;
+}
 #ifdef DEBUG_PRINT
 int platform::logMessage(log_priority priority, const char *fmt, ...) {
     va_list args;
